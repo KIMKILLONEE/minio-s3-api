@@ -1,0 +1,27 @@
+{
+  "name": "minio-s3-api",
+  "version": "1.0.0",
+  "description": "API em Node.js para armazenamento de objetos (upload, listagem, download e remoção de arquivos) usando o AWS SDK v3 (@aws-sdk/client-s3) contra um MinIO rodando via Docker.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "keywords": [
+    "s3",
+    "minio",
+    "object-storage",
+    "aws-sdk",
+    "nodejs"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.637.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^2.0.0"
+  }
+}
