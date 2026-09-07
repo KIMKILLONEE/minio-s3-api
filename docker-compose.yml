@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   minio:
     image: minio/minio:latest
@@ -7,9 +5,11 @@ services:
     ports:
       - "9000:9000" # API S3
       - "9001:9001" # Console Web
+    env_file:
+      - .env
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?Defina S3_ACCESS_KEY no .env}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?Defina S3_SECRET_KEY no .env}
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data

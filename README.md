@@ -1,248 +1,191 @@
-# API de Armazenamento de Objetos — Node.js + MinIO (S3)
+# API de arquivos com Node.js e MinIO (S3)
 
-API REST em Node.js/Express para **armazenar, listar, baixar e remover arquivos**
-usando o conceito de *object storage*, seguindo o protocolo do **Amazon S3**.
+Backend acadêmico para enviar, listar, baixar e excluir objetos, usando Express e o SDK oficial da AWS contra um MinIO local em Docker. Inclui URLs pré-assinadas válidas por 5 minutos. Não exige frontend nem conta AWS.
 
-Em vez de usar a AWS de fato (evitando custos e complexidade nesta fase do
-projeto), o servidor S3 é simulado localmente com o **MinIO**, rodando em
-um container Docker. A comunicação com o MinIO é feita através do **SDK
-oficial da AWS** (`@aws-sdk/client-s3`), e não de uma biblioteca própria do
-MinIO — ou seja, o mesmo código funcionaria contra um bucket real da AWS
-apenas trocando as variáveis de ambiente (endpoint e credenciais).
+## Arquitetura e estrutura
 
----
-
-## 1. Arquitetura da solução
-
-```
-Cliente (Postman/Insomnia/REST Client)
-        │
-        ▼
-  API Node.js (Express)
-        │  @aws-sdk/client-s3
-        ▼
-   MinIO (Docker) ── compatível com o protocolo S3
+```text
+Cliente HTTP -> API Node.js (3000) -> MinIO em Docker (9000)
+Cliente HTTP ---------------------> MinIO (URL pré-assinada)
+Console do MinIO: http://localhost:9001
 ```
 
-- **Express**: expõe os endpoints HTTP.
-- **Multer**: intercepta o upload `multipart/form-data` e entrega o arquivo
-  em memória (buffer) para a API.
-- **@aws-sdk/client-s3**: biblioteca oficial da AWS, usada para falar com
-  o MinIO como se fosse o S3 (`PutObjectCommand`, `ListObjectsV2Command`,
-  `GetObjectCommand`, `DeleteObjectCommand`).
-- **MinIO**: servidor de objetos compatível com S3, rodando via Docker.
+| Arquivo | Responsabilidade |
+|---|---|
+| `src/server.js` | Carrega o ambiente, verifica o bucket e inicia o servidor. |
+| `src/app.js` | Configura Express, CORS, rotas e respostas de erro; permite testes sem iniciar o MinIO. |
+| `src/config/env.js` | Valida configurações obrigatórias, porta e limite de upload. |
+| `src/config/s3Client.js` | Configura o SDK da AWS com endpoint local e `forcePathStyle: true`. |
+| `src/routes/files.js` | Upload, listagem, download, exclusão e assinatura de URLs. |
+| `src/utils/ensureBucket.js` | Verifica e cria o bucket quando necessário. |
+| `docker-compose.yml` | Serviço MinIO, credenciais e volume persistente. |
+| `test/backend.test.js` | Testes HTTP isolados com armazenamento simulado. |
+| `requests.http` | Requisições manuais para a extensão REST Client do VS Code. |
 
-## 2. Estrutura de pastas
+Bibliotecas: Express (HTTP), Multer (multipart e buffer de upload), dotenv (ambiente), cors (requisições entre origens), `@aws-sdk/client-s3` (operações S3) e `@aws-sdk/s3-request-presigner` (links temporários). Os testes usam o executor nativo do Node.js.
 
-```
-minio-s3-api/
-├── docker-compose.yml       # Sobe o MinIO
-├── .env.example             # Modelo de variáveis de ambiente
-├── package.json
-└── src/
-    ├── server.js             # Ponto de entrada da API
-    ├── config/
-    │   └── s3Client.js       # Configuração do cliente S3 apontando pro MinIO
-    ├── routes/
-    │   └── files.js          # Rotas de upload, listagem, download e remoção
-    └── utils/
-        └── ensureBucket.js   # Garante que o bucket exista ao iniciar
-```
+## Como executar
 
-## 3. Pré-requisitos
+Pré-requisitos: **Node.js 20 ou superior**, npm e Docker Desktop com Docker Compose v2. Execute os comandos na pasta que contém `package.json` e `docker-compose.yml`. As dependências AWS registradas no lockfile exigem Node 20 ou superior.
 
-- Node.js 18+
-- Docker e Docker Compose
+### 1. Configurar o ambiente
 
-## 4. Passo a passo para rodar o projeto
+No PowerShell, crie o `.env` somente se ainda não existir:
 
-### 4.1 Subir o MinIO
-
-```bash
-docker-compose up -d
+```powershell
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Isso sobe dois serviços na mesma porta do container `minio`:
+No Linux/macOS:
 
-- **API S3 do MinIO**: `http://localhost:9000`
-- **Console Web do MinIO**: `http://localhost:9001`
-  (login: `minioadmin` / senha: `minioadmin123`, definidos no
-  `docker-compose.yml`)
-
-O console web é opcional — serve apenas para visualizar, pelo navegador,
-os arquivos que a API for enviando ao bucket.
-
-### 4.2 Configurar as variáveis de ambiente
-
-```bash
-cp .env.example .env
+```sh
+[ -f .env ] || cp .env.example .env
 ```
 
-O arquivo `.env` já vem com valores padrão compatíveis com o
-`docker-compose.yml` (mesmo usuário/senha do MinIO). Não é necessário
-criar o bucket manualmente: a própria API verifica, na inicialização, se
-o bucket configurado (`S3_BUCKET`) existe e o cria automaticamente caso
-não exista (ver `src/utils/ensureBucket.js`).
+| Variável | Padrão/modelo | Uso |
+|---|---|---|
+| `PORT` | `3000` | Porta HTTP da API. |
+| `MAX_UPLOAD_BYTES` | `10485760` | Limite por upload: 10 MiB; inteiro positivo. |
+| `S3_ENDPOINT` | `http://localhost:9000` | Endereço do MinIO usado pelo SDK e pelos links. |
+| `S3_REGION` | `us-east-1` | Região usada na assinatura. |
+| `S3_ACCESS_KEY` | `minioadmin` | Usuário local do MinIO. |
+| `S3_SECRET_KEY` | `minioadmin123` | Senha de exemplo para desenvolvimento local. |
+| `S3_BUCKET` | `meus-arquivos` | Bucket padrão. |
 
-### 4.3 Instalar dependências e iniciar a API
+O Compose lê `S3_ACCESS_KEY` e `S3_SECRET_KEY` para configurar o usuário e a senha do MinIO. Não copie o modelo sobre um `.env` já configurado. As configurações exportadas no terminal têm prioridade sobre o `.env`; evite valores divergentes entre os terminais da API e do Compose.
 
-```bash
-npm install
+### 2. Iniciar o MinIO
+
+Com o Docker Desktop em execução:
+
+```powershell
+docker compose config --quiet
+docker compose up -d
+docker compose ps
+```
+
+Aguarde o serviço `minio` ficar `healthy`. A API S3 atende em `http://localhost:9000`; o console em `http://localhost:9001`, com as credenciais do `.env`. O volume `minio_data` mantém os objetos após reiniciar ou recriar o container.
+
+### 3. Instalar, testar e iniciar a API
+
+```powershell
+npm ci
+npm test
 npm start
 ```
 
-Saída esperada no terminal:
+`npm ci` instala as versões do `package-lock.json`. `npm test` não precisa de Docker nem do `.env`: usa credenciais fictícias e armazenamento simulado, sem acessar seus objetos reais. Na inicialização normal, a API verifica o bucket com `HeadBucketCommand` e o cria com `CreateBucketCommand` se ele não existir.
 
-```
-Bucket "meus-arquivos" não encontrado. Criando...
-Bucket "meus-arquivos" criado com sucesso.
-Servidor rodando em http://localhost:3000
-Bucket em uso: meus-arquivos
-```
+A mensagem esperada é `Servidor rodando em http://localhost:3000`. Para reinício automático durante o desenvolvimento, use `npm run dev`. Se usar `npm start`, reinicie a API com `Ctrl+C` e `npm start` após alterar código ou ambiente.
 
-## 5. Endpoints disponíveis
+## Endpoints
 
-| Método | Rota          | Descrição                                   |
-|--------|---------------|----------------------------------------------|
-| GET    | `/`           | Informações básicas da API                    |
-| POST   | `/files`      | Faz upload de um arquivo (campo `file`)       |
-| GET    | `/files`      | Lista todos os arquivos armazenados no bucket |
-| GET    | `/files/:key` | Baixa um arquivo específico pela sua chave    |
-| DELETE | `/files/:key` | Remove um arquivo específico pela sua chave   |
+| Método | Rota | Resultado esperado |
+|---|---|---|
+| GET | `/` | `200`: informações e mapa de endpoints. |
+| POST | `/upload` | `201`: upload de um arquivo no campo `file`. |
+| POST | `/files` | Alias de upload mantido por compatibilidade. |
+| GET | `/files` | `200`: metadados e `presignedUrl` de cada objeto. |
+| GET | `/files/:key` | `200`: download por stream. |
+| GET | `/files/:key?presigned=true` | `200`: JSON `{ "url": "..." }`. |
+| DELETE | `/files/:key` | `200`: exclusão idempotente da chave. |
 
-### 5.1 Testando com Postman / Insomnia / REST Client
+Copie a **key completa** retornada pela API, não apenas o timestamp ou o nome original. Para montar uma URL por código, use `encodeURIComponent(key)`, especialmente para espaços, acentos, `#`, `?` e `/`. Para abrir diretamente um objeto, também pode copiar o `presignedUrl` pronto da listagem.
 
-**Upload de arquivo**
+### Upload
 
-```
-POST http://localhost:3000/files
-Content-Type: multipart/form-data
+No Postman/Insomnia, use `POST http://localhost:3000/upload`, Body do tipo multipart/form-data, campo `file` do tipo File. Deixe o cliente definir o cabeçalho Content-Type com o boundary. Em `requests.http`, o boundary já está definido e o arquivo de exemplo está incluído.
 
-Body (form-data):
-  key:  file
-  type: File
-  valor: (selecionar um arquivo do computador)
-```
+O arquivo passa por `multer.memoryStorage()` e é enviado com `PutObjectCommand`. O limite padrão é 10 MiB por arquivo, ajustável por `MAX_UPLOAD_BYTES`. Uploads simultâneos ainda somam consumo de memória; esta implementação é voltada ao escopo local do trabalho.
 
-Resposta esperada:
+Exemplo de resposta (valores ilustrativos):
 
 ```json
 {
   "message": "Arquivo enviado com sucesso.",
-  "key": "1717000000000-exemplo.pdf",
-  "originalName": "exemplo.pdf",
-  "size": 10240,
-  "mimeType": "application/pdf"
+  "key": "1788796466097-550e8400-e29b-41d4-a716-446655440000-exemplo.txt",
+  "originalName": "exemplo.txt",
+  "size": 64,
+  "mimeType": "text/plain"
 }
 ```
 
-**Listar arquivos**
+As novas chaves combinam timestamp, UUID e nome para evitar colisões entre envios simultâneos. O nome original é salvo em metadados com codificação de URL, incluindo suporte a acentos e emoji. As chaves antigas continuam aceitas; não é necessário reenviar os objetos.
 
-```
-GET http://localhost:3000/files
-```
+### Listagem e links temporários
 
-```json
-{
-  "bucket": "meus-arquivos",
-  "total": 1,
-  "files": [
-    {
-      "key": "1717000000000-exemplo.pdf",
-      "size": 10240,
-      "lastModified": "2026-08-30T12:00:00.000Z"
-    }
-  ]
-}
-```
+A listagem retorna `{ "bucket": "meus-arquivos", "total": 1, "files": [...] }`. Cada objeto inclui:
 
-**Baixar arquivo**
+- `key`: identificador completo utilizado para download e exclusão.
+- `originalName`: nome salvo no upload; em arquivos antigos, recuperado da chave sem o prefixo.
+- `size`: tamanho em bytes.
+- `lastModified`: última modificação no armazenamento, não uma data de criação independente.
+- `contentType`: tipo MIME informado no upload; `application/octet-stream` quando ausente. Não representa inspeção do conteúdo do arquivo.
+- `presignedUrl`: link completo de acesso direto ao MinIO, válido por 300 segundos a partir da geração.
 
-```
-GET http://localhost:3000/files/1717000000000-exemplo.pdf
-```
+A API percorre todas as páginas de `ListObjectsV2Command` e consulta `HeadObjectCommand` em lotes de até dez objetos. Um arquivo excluído durante a consulta é omitido, sem impedir a listagem dos demais. A resposta completa continua sendo montada em memória; não há paginação pública da API.
 
-**Remover arquivo**
+Para renovar os links, consulte `GET /files` novamente. A rota individual com `?presigned=true` também continua disponível e verifica a existência do arquivo antes de gerar o link. As respostas com URLs usam `Cache-Control: no-store`.
 
-```
-DELETE http://localhost:3000/files/1717000000000-exemplo.pdf
-```
+Quem possui o link pode utilizá-lo durante sua validade; ele não é de uso único. A expiração não remove o objeto. No ambiente local, links com `localhost:9000` devem ser abertos no computador onde o MinIO está rodando. Não altere o endereço assinado.
 
-Se estiver usando a extensão **REST Client** do VS Code, um arquivo
-`requests.http` com esses mesmos exemplos pode ser criado a partir do
-modelo acima (não incluído aqui por depender de um arquivo local real
-para o upload).
+### Download, exclusão e erros
 
-## 6. Passos executados durante o desenvolvimento
+O download usa `GetObjectCommand` e `pipeline` para transferir o stream e encerrar os recursos em caso de erro ou cancelamento. O cabeçalho de download é montado pelo Express para suportar nomes com caracteres especiais. Se o stream falhar após iniciar a resposta, a transferência será interrompida; a API não consegue substituir bytes já enviados por um JSON de erro.
 
-1. Definição do `docker-compose.yml` com a imagem oficial `minio/minio`,
-   expondo a porta `9000` (API) e `9001` (console).
-2. Criação do projeto Node.js (`npm init`) e instalação das dependências:
-   `express`, `@aws-sdk/client-s3`, `multer`, `dotenv`, `cors`.
-3. Configuração do `S3Client` apontando para o endpoint do MinIO.
-4. Implementação da rotina de verificação/criação automática do bucket
-   na subida da aplicação.
-5. Implementação das rotas de upload, listagem, download e remoção de
-   arquivos.
-6. Testes manuais dos endpoints via cliente HTTP.
+A exclusão usa `DeleteObjectCommand`. Excluir uma chave já inexistente também retorna sucesso, seguindo a semântica idempotente do S3.
 
-## 7. Dificuldades encontradas e como foram resolvidas
+| Status | Situação |
+|---|---|
+| `400` | Arquivo ausente, campo incorreto, vários arquivos, multipart inválido ou chave excessivamente longa no upload. |
+| `404` | Rota inexistente ou objeto ausente no download/geração individual de URL. |
+| `413` | Arquivo acima do limite ou corpo JSON muito grande. |
+| `500` | Falha de armazenamento ou outro erro interno. |
 
-- **O SDK da AWS, por padrão, monta as URLs no formato
-  "virtual-hosted" (`bucket.endpoint.com`)**, que não funciona contra o
-  MinIO rodando localmente. A solução foi habilitar a opção
-  `forcePathStyle: true` no `S3Client`, que faz o SDK montar as URLs no
-  formato `endpoint/bucket` — o formato que o MinIO local espera.
+## Testes e validação
 
-- **Necessidade de criar o bucket manualmente antes de qualquer
-  upload.** Para não depender de um passo manual pelo console do MinIO,
-  foi criada a função `ensureBucket`, que verifica com `HeadBucketCommand`
-  se o bucket existe e, caso não exista, cria com `CreateBucketCommand`
-  automaticamente ao iniciar o servidor.
-
-- **Diferença entre o retorno de `GetObjectCommand` no navegador e no
-  Node.js.** No Node.js, o campo `Body` retornado é um stream legível
-  (`Readable`), então o arquivo é entregue ao cliente com `Body.pipe(res)`
-  em vez de ser convertido inteiramente para buffer antes de responder —
-  isso evita carregar arquivos grandes inteiramente na memória apenas
-  para o download.
-
-- **Aviso de vulnerabilidade do `multer@1.x`.** Durante a instalação, o
-  npm alertou que a versão 1.x do Multer possui vulnerabilidades
-  conhecidas, já corrigidas na versão 2.x. O `package.json` foi ajustado
-  para usar `multer@^2.0.0`.
-
-- **Nomes de arquivo duplicados.** Como o S3 (e o MinIO) não têm uma
-  restrição própria contra sobrescrita de objetos com a mesma chave, um
-  upload de um arquivo com nome repetido substituiria silenciosamente o
-  anterior. Para evitar isso, cada chave gravada no bucket recebe um
-  prefixo com timestamp (`Date.now()-nomeOriginal`), garantindo chaves
-  únicas mesmo para arquivos com o mesmo nome original.
-
-- **Validação sem um MinIO ativo.** Durante o desenvolvimento, os testes
-  de sintaxe e inicialização foram feitos antes de subir o container do
-  MinIO; nesse cenário a aplicação falha, de forma esperada e tratada,
-  com `ECONNREFUSED` ao tentar verificar o bucket — confirmando que o
-  ponto de falha é a ausência do MinIO, e não um erro de código.
-
-## 8. Como subir este projeto no GitHub
-
-```bash
-git init
-git add .
-git commit -m "API Node.js de armazenamento de objetos com MinIO (S3)"
-git branch -M main
-git remote add origin https://github.com/<seu-usuario>/minio-s3-api.git
-git push -u origin main
+```powershell
+npm test
+npm audit --omit=dev
 ```
 
-> O arquivo `.env` **não** deve ser versionado (já está listado no
-> `.gitignore`) — apenas o `.env.example`, que serve de modelo para quem
-> for clonar o repositório.
+Os testes automatizados cobrem operações HTTP, integridade binária, nomes Unicode, uploads simultâneos, limites, multipart inválido, paginação, exclusão durante listagem, assinatura real do SDK, download, falha de stream, configuração e criação do bucket. O armazenamento é simulado: esses testes não comprovam a aceitação da assinatura pelo MinIO, a expiração real ou a persistência do volume.
 
-## 9. Encerrando o ambiente
+Roteiro manual com o ambiente real, usando `requests.http`, Postman ou Insomnia:
 
-```bash
-docker-compose down       # para o MinIO
-docker-compose down -v    # para o MinIO e apaga os dados armazenados
+1. Envie `test/fixtures/exemplo.txt` por `POST /upload` e guarde a key.
+2. Consulte `GET /files` e confira nome, tamanho, tipo e link temporário.
+3. Baixe pela key completa e compare o conteúdo com o arquivo original.
+4. Abra o `presignedUrl` no navegador. Após 5 minutos, tente um novo acesso à mesma URL em janela anônima; o MinIO deve negar o acesso.
+5. Consulte novamente a listagem e confirme que o novo link funciona.
+6. Confira o objeto no console do MinIO. Exclua apenas os arquivos usados no teste.
+
+Se o cliente HTTP exigir versão paga para respostas binárias, abra o download ou o link assinado no navegador. Se aparecer `ECONNREFUSED`, confira `docker compose ps` e `S3_ENDPOINT`; se houver `EADDRINUSE`, encerre a outra API ou ajuste `PORT`. Para examinar o MinIO, use `docker compose logs --tail 50 minio`.
+
+## Repositório e escopo
+
+O `.gitignore` exclui `.env`, `node_modules/` e logs. Versione o código, `.env.example`, `package.json`, `package-lock.json`, Compose, README e testes. Execute `git status` e revise o diff antes do commit. O `RELATORIO.md` registra o desenvolvimento anterior; este README descreve o funcionamento atual.
+
+A seção de metodologia atualizada está em [docs/SECAO_4.md](docs/SECAO_4.md), para integração ao artigo do grupo. Ela incorpora as correções da revisão e substitui a descrição técnica do PDF anterior.
+
+Referências de implementação: [Multer e limites de upload](https://expressjs.com/en/resources/middleware/multer/), [paginação de ListObjectsV2](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html) e [streams do Node.js](https://nodejs.org/api/stream.html).
+
+Este backend não implementa autenticação nem autorização e mantém CORS aberto para os testes locais. Publicar o código no GitHub não equivale a expor a API na internet; controles de acesso precisam ser definidos antes de uma implantação pública.
+
+O `package.json` usa um override de `qs` para a versão corrigida 6.16 ou superior dentro da versão principal 6, pois dependências do Express restringiam a instalação a versões apontadas pela auditoria. Mantenha o lockfile e reavalie com `npm audit` ao atualizar dependências. A imagem `minio/minio:latest` acompanha o projeto original; não é uma versão imutável, portanto atualizações da imagem exigem nova validação local.
+
+## Encerrar ou reaplicar a configuração
+
+Para aplicar mudanças no Compose preservando o volume:
+
+```powershell
+docker compose up -d
 ```
+
+Para parar e remover o container, mantendo os dados:
+
+```powershell
+docker compose down
+```
+
+Não acrescente `-v` a esse comando se quiser manter os arquivos: essa opção remove o volume persistente. Para parar somente a API, use `Ctrl+C` no terminal dela.
