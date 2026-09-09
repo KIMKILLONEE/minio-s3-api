@@ -1,5 +1,9 @@
 # Relatório do Projeto — API de Armazenamento de Objetos (Node.js + MinIO/S3)
 
+> Registro histórico da implementação inicial. A revisão atual inclui URLs
+> pré-assinadas, UUID nas chaves, limite de upload, paginação e testes isolados.
+> Consulte o [README](README.md) para o funcionamento e os comandos atuais.
+
 ## 1. Objetivo
 
 Construir uma API REST em Node.js/Express capaz de **enviar, listar, baixar e
